@@ -22,46 +22,71 @@ async fn main() -> ExitCode {
     // Parse command line arguments
     let cli = Cli::parse();
 
+    // Initialise environment logger
+    let verbose = cli.verbose;
+    let mut builder = env_logger::Builder::from_default_env();
+    if verbose == 0 {
+        builder.init();
+    } else if verbose == 1 {
+        builder.filter(None, log::LevelFilter::Info).init();
+    } else if verbose == 2 {
+        builder.filter(None, log::LevelFilter::Debug).init();
+    } else {
+        builder.filter(None, log::LevelFilter::Trace).init();
+    }
+
     let conn = match Connection::session().await {
         Ok(conn) => conn,
-        Err(_) => todo!(),
+        Err(err) => {
+            log::error!("Unable to connect to session bus: {}", err);
+            return ExitCode::FAILURE;
+        }
     };
     let proxy = match SettingsProxy::new(&conn).await {
         Ok(proxy) => proxy,
-        Err(_) => todo!(),
+        Err(err) => {
+            log::error!("Unable to create proxy: {}", err);
+            return ExitCode::FAILURE;
+        }
     };
     let mut stream = match proxy.receive_setting_changed().await {
         Ok(stream) => stream,
-        Err(_) => todo!(),
+        Err(err) => {
+            log::error!("Unable to register for changed settings signals: {}", err);
+            return ExitCode::FAILURE;
+        }
     };
 
-    println!("Start listening for setting changes");
+    log::info!("Start listening for setting changes");
 
     loop {
         select! {
             _ = signal::ctrl_c() => {
-                println!("Received Ctrl+C, exiting...");
+                log::debug!("Received Ctrl+C, exiting...");
                 break;
             }
             Some(signal) = stream.next() => {
                 let args = match signal.args() {
                     Ok(stream) => stream,
-                    Err(_) => todo!(),
+                    Err(err) => {
+                        log::warn!("Unable to parse signal change: {}", err);
+                        continue;
+                    }
                 };
                 let signal = DBusSignal::new(args.namespace, args.key, args.value);
                 let theme = match ThemeMode::try_from(signal) {
                     Ok(theme) => theme,
                     Err(err @ ThemeModeError::InvalidNameSpace(_)) | Err(err @ ThemeModeError::InvalidKey(_)) => {
-                        eprintln!("Unable to parse signal change: {}", err);
+                        log::warn!("Unable to parse signal change: {}", err);
                         continue;
                     }
                     Err(err @ ThemeModeError::InvalidValue) => {
-                        eprintln!("Unable to parse signal change: {}", err);
+                        log::error!("Unable to parse signal change: {}", err);
                         return ExitCode::FAILURE;
                     }
                 };
 
-                println!("New colorscheme change: {}", theme);
+                log::info!("New colorscheme change: {}", theme);
             }
         }
     }
