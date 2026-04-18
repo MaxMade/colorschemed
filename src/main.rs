@@ -1,40 +1,64 @@
+//! Update colorscheme upon changes of `org.freedesktop.appearance` DBus interface (`color-scheme`).
+
+pub mod dbus;
+pub mod theme;
+
+use std::process::ExitCode;
+
 use futures_util::stream::StreamExt;
 use tokio::{select, signal};
-use zbus::{Connection, proxy};
-use zvariant::OwnedValue;
+use zbus::Connection;
 
-#[proxy(
-    interface = "org.freedesktop.portal.Settings",
-    default_service = "org.freedesktop.portal.Desktop",
-    default_path = "/org/freedesktop/portal/desktop"
-)]
-trait Settings {
-    #[zbus(signal)]
-    fn setting_changed(&self, namespace: &str, key: &str, value: OwnedValue) -> zbus::Result<()>;
-}
+use crate::{
+    dbus::{DBusSignal, SettingsProxy},
+    theme::{ThemeMode, ThemeModeError},
+};
 
 #[tokio::main]
-async fn main() -> zbus::Result<()> {
-    let conn = Connection::session().await?;
+async fn main() -> ExitCode {
+    let conn = match Connection::session().await {
+        Ok(conn) => conn,
+        Err(_) => todo!(),
+    };
+    let proxy = match SettingsProxy::new(&conn).await {
+        Ok(proxy) => proxy,
+        Err(_) => todo!(),
+    };
+    let mut stream = match proxy.receive_setting_changed().await {
+        Ok(stream) => stream,
+        Err(_) => todo!(),
+    };
 
-    let proxy = SettingsProxy::new(&conn).await?;
-
-    let mut stream = proxy.receive_setting_changed().await?;
+    println!("Start listening for setting changes");
 
     loop {
         select! {
             _ = signal::ctrl_c() => {
+                println!("Received Ctrl+C, exiting...");
                 break;
             }
             Some(signal) = stream.next() => {
-                let args = signal.args()?;
-                println!(
-                    "Changed: {}.{} = {:?}",
-                    args.namespace, args.key, args.value
-                );
+                let args = match signal.args() {
+                    Ok(stream) => stream,
+                    Err(_) => todo!(),
+                };
+                let signal = DBusSignal::new(args.namespace, args.key, args.value);
+                let theme = match ThemeMode::try_from(signal) {
+                    Ok(theme) => theme,
+                    Err(err @ ThemeModeError::InvalidNameSpace(_)) | Err(err @ ThemeModeError::InvalidKey(_)) => {
+                        eprintln!("Unable to parse signal change: {}", err);
+                        continue;
+                    }
+                    Err(err @ ThemeModeError::InvalidValue) => {
+                        eprintln!("Unable to parse signal change: {}", err);
+                        return ExitCode::FAILURE;
+                    }
+                };
+
+                println!("New colorscheme change: {}", theme);
             }
         }
     }
 
-    Ok(())
+    ExitCode::SUCCESS
 }
