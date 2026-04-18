@@ -1,21 +1,27 @@
 //! Update colorscheme upon changes of `org.freedesktop.appearance` DBus interface (`color-scheme`).
 
+pub mod cli;
 pub mod dbus;
 pub mod theme;
 
 use std::process::ExitCode;
 
+use clap::Parser;
 use futures_util::stream::StreamExt;
 use tokio::{select, signal};
 use zbus::Connection;
 
 use crate::{
+    cli::Cli,
     dbus::{DBusSignal, SettingsProxy},
     theme::{ThemeMode, ThemeModeError},
 };
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Parse command line arguments
+    let cli = Cli::parse();
+
     let conn = match Connection::session().await {
         Ok(conn) => conn,
         Err(_) => todo!(),
