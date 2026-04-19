@@ -1,6 +1,7 @@
 //! Update colorscheme upon changes of `org.freedesktop.appearance` DBus interface (`color-scheme`).
 
 pub mod cli;
+pub mod config;
 pub mod dbus;
 pub mod theme;
 
@@ -13,6 +14,7 @@ use zbus::Connection;
 
 use crate::{
     cli::Cli,
+    config::Config,
     dbus::{DBusSignal, SettingsProxy},
     theme::{ThemeMode, ThemeModeError},
 };
@@ -34,6 +36,18 @@ async fn main() -> ExitCode {
     } else {
         builder.filter(None, log::LevelFilter::Trace).init();
     }
+
+    // Parse configuration
+    let config = match cli.config {
+        Some(path) => match Config::new(path) {
+            Ok(config) => config,
+            Err(error) => {
+                log::error!("Unable to parse configuration: {}", error);
+                return ExitCode::FAILURE;
+            }
+        },
+        None => Config::default(),
+    };
 
     let conn = match Connection::session().await {
         Ok(conn) => conn,

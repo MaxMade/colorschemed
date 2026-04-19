@@ -1,0 +1,39 @@
+# Placeholder mappings
+# 
+# The [Mappings] section defines case-sensitive keys that map to a pair of
+# values used depending on the current theme or mode:
+# - light: value used in light mode
+# - dark: value used in dark mode
+#
+# Keys are case-sensitive and may define different formatting variants.
+
+# Uppercase variant of "mode"
+[Mappings.MODE]
+light = "LIGHT"
+dark = "DARK"
+
+# Title-case variant of "mode"
+[Mappings.Mode]
+light = "Light"
+dark = "Dark"
+
+# Lowercase variant of "mode"
+[Mappings.mode]
+light = "light"
+dark = "dark"
+
+
+# Command configuration
+# 
+# Controls how commands are executed and whether confirmation is required.
+[Commands]
+
+# If true, the user will be prompted before executing any command.
+# 
+# Default: false
+ask-before = false
+
+# List of commands.
+# 
+# Default: []
+commands = []
