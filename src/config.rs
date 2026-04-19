@@ -11,6 +11,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::theme::ThemeMode;
+
 /// Errors that can occur while loading or parsing the configuration file.
 #[derive(Debug)]
 pub enum ConfigError {
@@ -66,6 +68,15 @@ pub struct Placeholder {
     dark: String,
 }
 
+impl Placeholder {
+    fn get(&self, mode: ThemeMode) -> &str {
+        match mode {
+            ThemeMode::Light => &self.light,
+            ThemeMode::Dark => &self.dark,
+        }
+    }
+}
+
 /// Configuration for command execution.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Commands {
@@ -107,21 +118,21 @@ impl Default for Config {
         };
 
         config.mappings.insert(
-            "mode".to_string(),
+            "{{-mode-}}".to_string(),
             Placeholder {
                 light: "light".to_string(),
                 dark: "dark".to_string(),
             },
         );
         config.mappings.insert(
-            "Mode".to_string(),
+            "{{-Mode-}}".to_string(),
             Placeholder {
                 light: "Light".to_string(),
                 dark: "Dark".to_string(),
             },
         );
         config.mappings.insert(
-            "MODE".to_string(),
+            "{{-MODE-}}".to_string(),
             Placeholder {
                 light: "LIGHT".to_string(),
                 dark: "DARK".to_string(),
@@ -144,8 +155,39 @@ impl Config {
         let mut content = String::new();
         file.read_to_string(&mut content)?;
 
-        let config: Config = toml::from_str(content.as_str())?;
+        let mut config: Config = toml::from_str(content.as_str())?;
+
+        let mappings = config
+            .mappings
+            .drain()
+            .map(|(mut key, value)| {
+                key.insert_str(0, "{{-");
+                key.push_str("-}}");
+                (key, value)
+            })
+            .collect();
+        config.mappings = mappings;
+
         Ok(config)
+    }
+
+    /// Return a flag indicating the user should be prompted before executing commands.
+    pub fn ask_before(&self) -> bool {
+        self.commands.ask_before_execute
+    }
+
+    /// Get an [`Iterator`] over target commands with all mapping expanded.
+    pub fn commands(&self, mode: ThemeMode) -> impl Iterator<Item = String> {
+        self.commands.commands.iter().map(move |command| {
+            let mut command = command.clone();
+
+            for (identifier, placeholder) in self.mappings.iter() {
+                let placeholder = placeholder.get(mode);
+                command = command.replace(identifier, placeholder);
+            }
+
+            command
+        })
     }
 }
 

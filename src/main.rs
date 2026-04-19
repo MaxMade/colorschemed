@@ -5,11 +5,11 @@ pub mod config;
 pub mod dbus;
 pub mod theme;
 
-use std::process::ExitCode;
+use std::{io::Write as _, process::ExitCode};
 
 use clap::Parser;
 use futures_util::stream::StreamExt;
-use tokio::{select, signal};
+use tokio::io::AsyncBufReadExt;
 use zbus::Connection;
 
 use crate::{
@@ -49,6 +49,7 @@ async fn main() -> ExitCode {
         None => Config::default(),
     };
 
+    // Connect to DBus
     let conn = match Connection::session().await {
         Ok(conn) => conn,
         Err(err) => {
@@ -71,36 +72,111 @@ async fn main() -> ExitCode {
         }
     };
 
+    // Showtime
     log::info!("Start listening for setting changes");
-
-    loop {
-        select! {
-            _ = signal::ctrl_c() => {
-                log::debug!("Received Ctrl+C, exiting...");
-                break;
+    while let Some(signal) = stream.next().await {
+        let args = match signal.args() {
+            Ok(stream) => stream,
+            Err(err) => {
+                log::warn!("Unable to parse signal change: {}", err);
+                continue;
             }
-            Some(signal) = stream.next() => {
-                let args = match signal.args() {
-                    Ok(stream) => stream,
-                    Err(err) => {
-                        log::warn!("Unable to parse signal change: {}", err);
-                        continue;
-                    }
-                };
-                let signal = DBusSignal::new(args.namespace, args.key, args.value);
-                let theme = match ThemeMode::try_from(signal) {
-                    Ok(theme) => theme,
-                    Err(err @ ThemeModeError::InvalidNameSpace(_)) | Err(err @ ThemeModeError::InvalidKey(_)) => {
-                        log::warn!("Unable to parse signal change: {}", err);
-                        continue;
-                    }
-                    Err(err @ ThemeModeError::InvalidValue) => {
-                        log::error!("Unable to parse signal change: {}", err);
-                        return ExitCode::FAILURE;
-                    }
-                };
+        };
 
-                log::info!("New colorscheme change: {}", theme);
+        // Try to parse signal
+        let signal = DBusSignal::new(args.namespace, args.key, args.value);
+        let theme = match ThemeMode::try_from(signal) {
+            Ok(theme) => theme,
+            Err(err @ ThemeModeError::InvalidNameSpace(_))
+            | Err(err @ ThemeModeError::InvalidKey(_)) => {
+                log::warn!("Unable to parse signal change: {}", err);
+                continue;
+            }
+            Err(err @ ThemeModeError::InvalidValue) => {
+                log::error!("Unable to parse signal change: {}", err);
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // Detected colorscheme change
+        log::info!("New colorscheme change: {}", theme);
+
+        'outer: for command in config.commands(theme) {
+            // Ask user before executing (if necessary)
+            'inner: while config.ask_before() {
+                print!("Want to execute command \"{}\"? [yn] ", command);
+                std::io::stdout().flush().unwrap();
+
+                let stdin = tokio::io::stdin();
+                let mut reader = tokio::io::BufReader::new(stdin);
+                let mut input = String::new();
+
+                reader.read_line(&mut input).await.unwrap();
+                let ch = input.chars().next();
+                match ch {
+                    Some(c) if c == 'y' => break 'inner,
+                    Some(c) if c == 'n' => continue 'outer,
+                    Some(c) => println!("Invalid input {}, expected 'y' or 'no'", c),
+                    None => println!("No input received"),
+                }
+            }
+
+            log::debug!("Executing \"{}\"", command);
+
+            // Expand variables
+            let command = match shellexpand::env(command.as_str()) {
+                Ok(command) => command,
+                Err(error) => {
+                    log::error!("Unable to expand environment variables: {}", error);
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            // Split command
+            let parts = match shell_words::split(command.as_ref()) {
+                Ok(parts) => parts,
+                Err(error) => {
+                    log::error!("Unable to tokenize input command: {}", error);
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            let (program, args) = match parts.split_first() {
+                Some(parts) => parts,
+                None => {
+                    log::error!("Unable to tokenize empty command");
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            // Spawn process
+            let process = match tokio::process::Command::new(program)
+                .args(args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(process) => process,
+                Err(error) => {
+                    log::error!("Unable to spawn command: {}", error);
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            // Wait for process
+            let output = match process.wait_with_output().await {
+                Ok(output) => output,
+                Err(error) => {
+                    log::error!("Unable to wait for process: {}", error);
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            if !output.status.success() {
+                log::error!(
+                    "Execution of command failed: {}",
+                    String::from_utf8(output.stderr).unwrap()
+                );
             }
         }
     }

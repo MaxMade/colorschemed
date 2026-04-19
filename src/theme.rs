@@ -58,7 +58,7 @@ impl<'a> Error for ThemeModeError<'a> {
 }
 
 /// Parsed theme mode.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
     /// Light theme.
     Light = 2,
