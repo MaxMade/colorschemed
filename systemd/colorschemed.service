@@ -1,0 +1,11 @@
+[Unit]
+Description=Update colorscheme upon changes of org.freedesktop.appearance DBus interface
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/colorschemed
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target
