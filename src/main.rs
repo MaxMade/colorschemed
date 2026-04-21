@@ -38,15 +38,12 @@ async fn main() -> ExitCode {
     }
 
     // Parse configuration
-    let config = match cli.config {
-        Some(path) => match Config::new(path) {
-            Ok(config) => config,
-            Err(error) => {
-                log::error!("Unable to parse configuration: {}", error);
-                return ExitCode::FAILURE;
-            }
-        },
-        None => Config::default(),
+    let config = match Config::load(cli.config) {
+        Ok(config) => config,
+        Err(error) => {
+            log::error!("Unable to parse configuration: {}", error);
+            return ExitCode::FAILURE;
+        }
     };
 
     // Connect to DBus

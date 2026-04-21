@@ -6,12 +6,15 @@ use std::{
     fmt::Display,
     fs::File,
     io::{self, Read},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
+use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::theme::ThemeMode;
+
+const APP_NAME: &'static str = "colorschemed";
 
 /// Errors that can occur while loading or parsing the configuration file.
 #[derive(Debug)]
@@ -20,14 +23,14 @@ pub enum ConfigError {
     IO(io::Error),
 
     /// An error occurred while parsing the TOML configuration.
-    Toml(toml::de::Error),
+    TOML(toml::de::Error),
 }
 
 impl Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::IO(error) => write!(f, "{}", error),
-            ConfigError::Toml(error) => write!(f, "{}", error),
+            ConfigError::TOML(error) => write!(f, "{}", error),
         }
     }
 }
@@ -54,7 +57,7 @@ impl From<io::Error> for ConfigError {
 
 impl From<toml::de::Error> for ConfigError {
     fn from(value: toml::de::Error) -> Self {
-        ConfigError::Toml(value)
+        ConfigError::TOML(value)
     }
 }
 
@@ -144,18 +147,74 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Loads a configuration from a TOML file at the given path.
+    /// Loads a configuration from a TOML file if provided. Otherwise fallback
+    /// to default directories or, finally, default config.
     ///
     /// # Errors
     ///
     /// Returns `ConfigError::IO` if the file cannot be read, or
     /// `ConfigError::Toml` if parsing fails.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
-        let mut file = File::open(path.as_ref())?;
-        let mut content = String::new();
-        file.read_to_string(&mut content)?;
+    pub fn load<P: AsRef<Path>>(provided: Option<P>) -> Result<Config, ConfigError> {
+        let mut paths = Vec::new();
 
-        let mut config: Config = toml::from_str(content.as_str())?;
+        // Add user-provided config file
+        if let Some(provided) = provided {
+            paths.push(PathBuf::from(provided.as_ref()));
+        }
+
+        // Add system-wide configuration directory
+        if cfg!(unix) {
+            paths.push(PathBuf::from("/etc").join(APP_NAME).join("config.toml"));
+        } else if cfg!(windows) {
+            paths.push(
+                PathBuf::from(r"C:\ProgramData")
+                    .join(APP_NAME)
+                    .join("config.toml"),
+            );
+        }
+
+        // Start with default config
+        let mut config = Config::default();
+
+        // Add local configuration directory
+        if let Some(base_dirs) = BaseDirs::new() {
+            paths.push(
+                PathBuf::from(base_dirs.config_dir())
+                    .join(APP_NAME)
+                    .join("config.toml"),
+            );
+        }
+
+        // Try directories
+        for path in paths {
+            log::trace!("Trying configuration \"{:?}\"", path);
+
+            // Open file for reading
+            let mut file = match File::open(path) {
+                Ok(file) => file,
+                Err(_) => {
+                    // Ignoring invalid file...
+                    continue;
+                }
+            };
+
+            // Read the file contents
+            let mut contents = String::new();
+            if let Err(error) = file.read_to_string(&mut contents) {
+                return Err(ConfigError::IO(error));
+            }
+
+            // Parse Configuration
+            let c: Config = match toml::from_str(&contents) {
+                Ok(c) => c,
+                Err(error) => {
+                    return Err(ConfigError::TOML(error));
+                }
+            };
+
+            config = c;
+            break;
+        }
 
         let mappings = config
             .mappings
@@ -199,14 +258,14 @@ mod tests {
     fn default_config() {
         let default = Config::default();
 
-        let input = Config::new("config/config.toml").unwrap();
+        let input = Config::load(Some("config/config.toml")).unwrap();
 
         assert!(input == default);
     }
 
     #[test]
     fn example_config() {
-        let input = Config::new("config/example.toml");
+        let input = Config::load(Some("config/example.toml"));
         assert!(input.is_ok());
     }
 }
